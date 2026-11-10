@@ -2,9 +2,10 @@ import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {neon} from '@neondatabase/serverless';
 import {z,ZodError} from 'zod';
 import {createHmac,randomUUID} from 'node:crypto';
-import {subjectSchema,activitySchema,sessionSchema,settingsSchema,timerSchema,exportSchema} from '../src/lib/schemas.js';
+import {subjectSchema,activitySchema,sessionSchema,settingsSchema,timerSchema,exportSchema,itemsChangeSchema} from '../src/lib/schemas.js';
 import {defaultSubjects,defaultActivities} from '../src/lib/defaults.js';
 import {COOKIE,signToken,verifyToken,passcodeMatches,cookie} from './_lib/auth.js';
+import {ensureSchema} from './_lib/schema.js';
 class HttpError extends Error{constructor(public status:number,message:string){super(message);}}
 const idSchema=z.string().uuid();
 const objectBody=(req:VercelRequest)=>typeof req.body==='string'?JSON.parse(req.body):req.body;
@@ -17,7 +18,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  const method=req.method||'GET';
  if(!['GET','POST','PUT','DELETE'].includes(method)){res.setHeader('Allow','GET, POST, PUT, DELETE');throw new HttpError(405,'Method not allowed');}
  if(method!=='GET'&&req.headers.origin){const origin=new URL(req.headers.origin);if(origin.host!==req.headers.host)throw new HttpError(403,'Cross-origin requests are not allowed');}
- const sql=neon(process.env.DATABASE_URL);
+ const sql=neon(process.env.DATABASE_URL);await ensureSchema(sql);
  if(path==='login'&&method==='POST'){
  const body=z.object({passcode:z.string().min(1).max(1024)}).strict().parse(objectBody(req));
  const ip=String(req.headers['x-vercel-forwarded-for']||req.headers['x-forwarded-for']||'local').split(',')[0].trim();
@@ -30,8 +31,8 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  }
  if(!verifyToken(req.cookies?.[COOKIE],secret))throw new HttpError(401,'Please sign in');
  if(path==='logout'&&method==='POST'){z.object({}).strict().parse(objectBody(req));res.setHeader('Set-Cookie',cookie('',true));return res.status(200).json({ok:true});}
- const readData=async()=>{const [subjects,activity_types,sessions,settings,timer]=await sql.transaction([sql`SELECT * FROM subjects ORDER BY sort_order,name`,sql`SELECT * FROM activity_types ORDER BY sort_order,name`,sql`SELECT id,subject_id,activity_type_id,started_at,duration_minutes,notes,tags,focus_rating,is_sample FROM sessions ORDER BY started_at DESC`,sql`SELECT weekly_goal_minutes,theme,time_format FROM settings WHERE singleton=true`,sql`SELECT id,subject_id,activity_type_id,started_at,paused_at,accumulated_paused_ms FROM active_timer WHERE singleton=true`],{isolationLevel:'RepeatableRead',readOnly:true});
- if(!settings[0])throw new HttpError(503,'Run the database migration to finish setup.');return {version:1,subjects,activity_types,sessions,settings:settings[0],timer:timer[0]||null};};
+ const readData=async()=>{const [subjects,activity_types,sessions,settings,timer,items]=await sql.transaction([sql`SELECT * FROM subjects ORDER BY sort_order,name`,sql`SELECT * FROM activity_types ORDER BY sort_order,name`,sql`SELECT id,subject_id,activity_type_id,started_at,duration_minutes,notes,tags,focus_rating,is_sample FROM sessions ORDER BY started_at DESC`,sql`SELECT weekly_goal_minutes,theme,time_format FROM settings WHERE singleton=true`,sql`SELECT id,subject_id,activity_type_id,started_at,paused_at,accumulated_paused_ms FROM active_timer WHERE singleton=true`,sql`SELECT id,kind,data FROM items ORDER BY created_at,id`],{isolationLevel:'RepeatableRead',readOnly:true});
+ if(!settings[0])throw new HttpError(503,'Run the database migration to finish setup.');return {version:1,subjects,activity_types,sessions,settings:settings[0],items,timer:timer[0]||null};};
  if((path==='state'||path==='export')&&method==='GET'){const state=await readData();if(path==='export'){const {timer: _timer,...backup}=state;void _timer;return res.status(200).json(backup);}return res.status(200).json(state);}
  if(path==='sessions'){
  if(method==='GET'){const query=z.object({from:z.string().datetime({offset:true}).optional(),to:z.string().datetime({offset:true}).optional()}).parse(req.query);return res.status(200).json(await sql`SELECT id,subject_id,activity_type_id,started_at,duration_minutes,notes,tags,focus_rating,is_sample FROM sessions WHERE (${query.from||null}::timestamptz IS NULL OR started_at>=${query.from||null}::timestamptz) AND (${query.to||null}::timestamptz IS NULL OR started_at<=${query.to||null}::timestamptz) ORDER BY started_at DESC`);}
@@ -59,17 +60,23 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  else {const s=b.session;rows=await sql`WITH stopped AS (DELETE FROM active_timer WHERE id=${b.id} RETURNING id) INSERT INTO sessions(id,subject_id,activity_type_id,started_at,duration_minutes,notes,tags,focus_rating) SELECT ${s.id},${s.subject_id},${s.activity_type_id},${s.started_at},${s.duration_minutes},${s.notes},${s.tags},${s.focus_rating} FROM stopped RETURNING id`;}
  if(!rows.length)throw new HttpError(409,'The timer changed on another device. Refresh and try again.');return res.status(200).json({ok:true});}
  }
+ if(path==='items'){
+ if(method==='PUT'){const change=itemsChangeSchema.parse(objectBody(req));const list=Array.isArray(change)?change:[change];
+ const rows=await sql.transaction(list.map(i=>sql`INSERT INTO items(id,kind,data) VALUES(${i.id},${i.kind},${JSON.stringify(i.data)}::jsonb) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data,updated_at=now() WHERE items.kind=EXCLUDED.kind RETURNING id`));
+ if(rows.some(r=>!r.length))throw new HttpError(409,'An item with that ID already exists with a different type');return res.status(200).json({ok:true});}
+ if(method==='DELETE'){const {id}=z.object({id:idSchema}).strict().parse(objectBody(req));const rows=await sql`DELETE FROM items WHERE id=${id} RETURNING id`;if(!rows.length)throw new HttpError(404,'Item not found');return res.status(200).json({ok:true});}
+ }
  if(path==='import'&&method==='POST'){
- const b=exportSchema.parse(objectBody(req));await sql.transaction([sql`DELETE FROM active_timer`,sql`DELETE FROM sessions`,sql`DELETE FROM subjects`,sql`DELETE FROM activity_types`,...b.subjects.map(s=>sql`INSERT INTO subjects(id,name,color,archived,weekly_goal_minutes,sort_order) VALUES(${s.id},${s.name},${s.color},${s.archived},${s.weekly_goal_minutes},${s.sort_order})`),...b.activity_types.map(a=>sql`INSERT INTO activity_types(id,name,archived,sort_order) VALUES(${a.id},${a.name},${a.archived},${a.sort_order})`),...b.sessions.map(s=>sql`INSERT INTO sessions(id,subject_id,activity_type_id,started_at,duration_minutes,notes,tags,focus_rating,is_sample) VALUES(${s.id},${s.subject_id},${s.activity_type_id},${s.started_at},${s.duration_minutes},${s.notes},${s.tags},${s.focus_rating},${s.is_sample})`),sql`UPDATE settings SET weekly_goal_minutes=${b.settings.weekly_goal_minutes},theme=${b.settings.theme},time_format=${b.settings.time_format} WHERE singleton=true`]);return res.status(200).json({ok:true});
+ const b=exportSchema.parse(objectBody(req));await sql.transaction([sql`DELETE FROM active_timer`,sql`DELETE FROM sessions`,sql`DELETE FROM items`,sql`DELETE FROM subjects`,sql`DELETE FROM activity_types`,...b.subjects.map(s=>sql`INSERT INTO subjects(id,name,color,archived,weekly_goal_minutes,sort_order) VALUES(${s.id},${s.name},${s.color},${s.archived},${s.weekly_goal_minutes},${s.sort_order})`),...b.activity_types.map(a=>sql`INSERT INTO activity_types(id,name,archived,sort_order) VALUES(${a.id},${a.name},${a.archived},${a.sort_order})`),...b.sessions.map(s=>sql`INSERT INTO sessions(id,subject_id,activity_type_id,started_at,duration_minutes,notes,tags,focus_rating,is_sample) VALUES(${s.id},${s.subject_id},${s.activity_type_id},${s.started_at},${s.duration_minutes},${s.notes},${s.tags},${s.focus_rating},${s.is_sample})`),...b.items.map(i=>sql`INSERT INTO items(id,kind,data) VALUES(${i.id},${i.kind},${JSON.stringify(i.data)}::jsonb)`),sql`UPDATE settings SET weekly_goal_minutes=${b.settings.weekly_goal_minutes},theme=${b.settings.theme},time_format=${b.settings.time_format} WHERE singleton=true`]);return res.status(200).json({ok:true});
  }
  if(path==='data'&&method==='POST'){
  const b=z.object({action:z.enum(['sample','remove-sample','reset']),confirmation:z.string().optional()}).strict().parse(objectBody(req));
- if(b.action==='reset'){if(b.confirmation!=='RESET ALL DATA')throw new HttpError(400,'Reset confirmation required');await sql.transaction([sql`DELETE FROM active_timer`,sql`DELETE FROM sessions`,sql`DELETE FROM subjects`,sql`DELETE FROM activity_types`,...defaultSubjects.map(s=>sql`INSERT INTO subjects(id,name,color,sort_order) VALUES(${s.id},${s.name},${s.color},${s.sort_order})`),...defaultActivities.map(a=>sql`INSERT INTO activity_types(id,name,sort_order) VALUES(${a.id},${a.name},${a.sort_order})`),sql`UPDATE settings SET weekly_goal_minutes=1200,theme='system',time_format='24h' WHERE singleton=true`]);}
+ if(b.action==='reset'){if(b.confirmation!=='RESET ALL DATA')throw new HttpError(400,'Reset confirmation required');await sql.transaction([sql`DELETE FROM active_timer`,sql`DELETE FROM sessions`,sql`DELETE FROM items`,sql`DELETE FROM subjects`,sql`DELETE FROM activity_types`,...defaultSubjects.map(s=>sql`INSERT INTO subjects(id,name,color,sort_order) VALUES(${s.id},${s.name},${s.color},${s.sort_order})`),...defaultActivities.map(a=>sql`INSERT INTO activity_types(id,name,sort_order) VALUES(${a.id},${a.name},${a.sort_order})`),sql`UPDATE settings SET weekly_goal_minutes=1200,theme='system',time_format='24h' WHERE singleton=true`]);}
  else if(b.action==='remove-sample')await sql`DELETE FROM sessions WHERE is_sample=true`;
  else {const state=await readData();const subjects=state.subjects.filter(s=>!s.archived),activities=state.activity_types.filter(a=>!a.archived);if(!subjects.length||!activities.length)throw new HttpError(400,'Add an active subject and activity first');await sql.transaction([sql`DELETE FROM sessions WHERE is_sample=true`,...Array.from({length:45},(_,i)=>{const d=new Date();d.setUTCDate(d.getUTCDate()-Math.floor(i/2));d.setUTCHours(8+i%5,0,0,0);return sql`INSERT INTO sessions(id,subject_id,activity_type_id,started_at,duration_minutes,notes,tags,focus_rating,is_sample) VALUES(${randomUUID()},${subjects[i%subjects.length].id},${activities[i%activities.length].id},${d.toISOString()},${25+i%5*15},${'Sample study session'},${['sample']},${3+i%3},true)`;})]);}
  return res.status(200).json({ok:true});
  }
- if(['login','logout','state','export','sessions','subjects','activity-types','settings','timer','import','data'].includes(path))throw new HttpError(405,'Method not allowed');
+ if(['login','logout','state','export','sessions','subjects','activity-types','settings','timer','items','import','data'].includes(path))throw new HttpError(405,'Method not allowed');
  throw new HttpError(404,'API route not found');
  }catch(error){
  if(error instanceof ZodError)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:error.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; ')}});
