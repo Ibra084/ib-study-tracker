@@ -5,7 +5,7 @@ import {Plus,Trash2,Check,Target,TrendingUp,ListChecks,BookMarked,AlertTriangle}
 import {useData,useItemSave} from '../hooks/useData';
 import {today,shift,of,profileOf,staggered,when,daysUntil,type Profile} from '../lib/review';
 import {satFacts,satTips,satDates,satDomains,satResources,mistakeReasonInfo,sources} from '../lib/content';
-import {SAT_RW_ID,SAT_MATH_ID,PROFILE_ID} from '../lib/defaults';
+import {isSatSubject,PROFILE_ID} from '../lib/defaults';
 import {mistakeReasons} from '../lib/schemas';
 import {ScoreChart} from '../components/Charts';
 import {PageHeading,Empty,Source,formText,formNumber} from '../components/Ui';
@@ -13,7 +13,7 @@ const nice=(d:string)=>format(new Date(d+'T00:00:00'),'d MMM yyyy');
 export default function Sat(){
  const data=useData(),save=useItemSave(),[error,setError]=useState(''),[customDate,setCustomDate]=useState(false);
  const day=today(),profile=profileOf(data.items),scores=of(data.items,'score').filter(s=>s.data.test==='sat').sort((a,b)=>a.data.date.localeCompare(b.data.date));
- const mistakes=of(data.items,'mistake').filter(m=>m.data.subject_id===SAT_RW_ID||m.data.subject_id===SAT_MATH_ID).sort((a,b)=>b.data.date.localeCompare(a.data.date));
+ const mistakes=of(data.items,'mistake').filter(m=>isSatSubject(m.data.subject_id)).sort((a,b)=>b.data.date.localeCompare(a.data.date));
  const topics=of(data.items,'topic'),totals=scores.map(s=>({date:format(new Date(s.data.date+'T00:00:00'),'d MMM'),total:(s.data.rw||0)+(s.data.math||0),rw:s.data.rw,math:s.data.math}));
  const latest=totals.at(-1),best=totals.reduce((m,s)=>Math.max(m,s.total),0),reasonCounts=mistakeReasons.map(r=>({reason:r,count:mistakes.filter(m=>m.data.reason===r).length})).sort((a,b)=>b.count-a.count),top=reasonCounts[0]?.count?reasonCounts[0]:null;
  const run=async(action:()=>Promise<unknown>)=>{setError('');try{await action();return true;}catch(e){setError((e as Error).message);return false;}};

@@ -1,7 +1,9 @@
 import {beforeAll,afterAll,describe,it,expect,vi} from 'vitest';
 import {PGlite} from '@electric-sql/pglite';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
-import {defaultSubjects,defaultActivities,PROFILE_ID} from './defaults';
+import {defaultSubjects,defaultActivities,PROFILE_ID,SAT_ID} from './defaults';
+import {neon} from '@neondatabase/serverless';
+import {migrate} from '../../api/_lib/schema';
 import {signToken,COOKIE} from '../../api/_lib/auth';
 const holder=vi.hoisted(()=>({db:null as unknown as PGlite}));
 vi.mock('@neondatabase/serverless',()=>({neon:()=>{
@@ -34,6 +36,9 @@ describe('API with a PostgreSQL engine',()=>{
  expect((await request('timer','POST',stop)).status).toBe(200);expect((await request('timer','POST',stop)).status).toBe(409);
  const state=(await request('state')).body as {sessions:{id:string;subject_id:string}[];items:{id:string;data:{logged_minutes:number;done:boolean}}[]};
  expect(state.sessions.find(x=>x.id===session.id)?.subject_id).toBe(defaultSubjects[1].id);expect(state.items.find(i=>i.id===task.id)?.data).toMatchObject({logged_minutes:32.5,done:true});});
+ it('adds the overall SAT subject to an existing database exactly once',async()=>{expect(((await request('state')).body.subjects as {id:string}[]).some(s=>s.id===SAT_ID)).toBe(true);
+ await holder.db.query('DELETE FROM subjects WHERE id=$1',[SAT_ID]);await migrate(neon('postgresql://test') as never);expect((await holder.db.query('SELECT 1 FROM subjects WHERE id=$1',[SAT_ID])).rows).toHaveLength(0);
+ await holder.db.query("DELETE FROM app_meta WHERE key='sat_overall_v1'");await migrate(neon('postgresql://test') as never);expect((await holder.db.query('SELECT name FROM subjects WHERE id=$1',[SAT_ID])).rows).toEqual([{name:'SAT'}]);});
  it('throttles logins using durable database counters',async()=>{await holder.db.query("INSERT INTO login_attempts(bucket,attempts,reset_at) VALUES('irrelevant',1,now())");for(let i=0;i<10;i++)await request('login','POST',{passcode:'incorrect'},false);expect((await request('login','POST',{passcode:'private-test-passcode'},false)).status).toBe(429);},15000);
 });
 
