@@ -1,11 +1,12 @@
 import {useState} from 'react';
 import {Link} from 'react-router-dom';
 import {format} from 'date-fns';
-import {CalendarClock,Check,Lightbulb,Plus,Repeat2,Target,Trash2,Sparkles,ArrowRight} from 'lucide-react';
+import {CalendarClock,Check,Lightbulb,Plus,Repeat2,Target,Trash2,Sparkles,ArrowRight,Play} from 'lucide-react';
 import {useData,useItemSave} from '../hooks/useData';
 import {hours,periods} from '../lib/stats';
 import {today,shift,of,profileOf,dueQueue,when,daysUntil} from '../lib/review';
 import {tipOfTheDay} from '../lib/content';
+import {focusActivity} from '../components/Timer';
 import {PageHeading,SubjectChip,SubjectSelect,Empty,formText,formNumber} from '../components/Ui';
 import type {ItemOf} from '../types';
 type Task=ItemOf<'task'>;
@@ -18,7 +19,10 @@ export default function Today(){
  const subjects=data.subjects.filter(s=>!s.archived),deadlines=of(data.items,'milestone').filter(m=>!m.data.done&&m.data.date>=day).sort((a,b)=>a.data.date.localeCompare(b.data.date)).slice(0,4);
  const tip=tipOfTheDay(),done=list.filter(t=>t.data.done).length;
  const run=async(action:()=>Promise<unknown>)=>{setError('');try{await action();return true;}catch(e){setError((e as Error).message);return false;}};
- const add=(title:string,extra:Partial<Task['data']>={})=>run(()=>save.put({id:crypto.randomUUID(),kind:'task',data:{date:planDay,title,cue:'',subject_id:null,minutes:null,done:false,...extra}}));
+ const add=(title:string,extra:Partial<Task['data']>={})=>run(()=>save.put({id:crypto.randomUUID(),kind:'task',data:{date:planDay,title,cue:'',subject_id:null,minutes:null,done:false,logged_minutes:0,...extra}}));
+ // Starting from a task links the timer to it: the session is saved under the task's subject and its minutes are credited to the task.
+ const start=(t:Task)=>run(async()=>{const subject=subjects.find(s=>s.id===t.data.subject_id)||subjects[0];await save.mutateAsync({path:'timer',body:{action:'start',subject_id:subject.id,activity_type_id:focusActivity(data),task_id:t.id}});window.scrollTo({top:0,behavior:'smooth'});});
+ const progress=(t:Task)=>{const logged=Math.round(t.data.logged_minutes??0);return logged?(t.data.minutes?`${logged} of ${t.data.minutes} min focused`:`${logged} min focused`):t.data.minutes?`${t.data.minutes} min`:'';};
  const suggestions=[queue.length&&{title:`Review ${queue.length} due item${queue.length===1?'':'s'}`,minutes:Math.min(45,Math.max(10,queue.length*3))},deadlines[0]&&daysUntil(deadlines[0].data.date)<=14&&{title:`Next step on: ${deadlines[0].data.title}`,minutes:45,subject_id:deadlines[0].data.subject_id},{title:'Timed past-paper questions, then mark with the markscheme',minutes:40}].filter(Boolean).filter(s=>s&&!list.some(t=>t.data.title===s.title)).slice(0,3) as {title:string;minutes:number;subject_id?:string|null}[];
  return <>
  <PageHeading eyebrow={format(new Date(),'EEEE, MMMM d')} title={`${greeting()}.`} lead={queue.length||list.length?`${queue.length} review${queue.length===1?'':'s'} due · ${list.length-done} task${list.length-done===1?'':'s'} left ${view==='today'?'today':'for tomorrow'}`:'Plan one small, specific thing and start there.'}><Countdowns/></PageHeading>
@@ -28,7 +32,7 @@ export default function Today(){
  <div className="card-heading"><div><h2 id="plan-title">{view==='today'?'Today’s plan':'Tomorrow’s plan'}</h2><p>{list.length?`${done} of ${list.length} done`:'Small, specific tasks with a clear “when” get done.'}</p></div><div className="segmented" role="group" aria-label="Plan day">{(['today','tomorrow'] as const).map(v=><button key={v} className={view===v?'active':''} aria-pressed={view===v} onClick={()=>setView(v)}>{v==='today'?'Today':'Tomorrow'}</button>)}</div></div>
  {list.length>0&&<div className="progress-track plan-progress" aria-hidden><span style={{width:`${done/list.length*100}%`}}/></div>}
  {view==='today'&&carry.length>0&&<div className="notice"><span>{carry.length} unfinished task{carry.length===1?'':'s'} from earlier days.</span><button className="text-link" disabled={save.isPending} onClick={()=>run(()=>save.put(carry.map(t=>({...t,data:{...t.data,date:day}}))))}>Move to today</button></div>}
- <ul className="task-list">{list.map(t=><li key={t.id} className={t.data.done?'done':''}><button className="check" role="checkbox" aria-checked={t.data.done} aria-label={`Mark “${t.data.title}” ${t.data.done?'not done':'done'}`} onClick={()=>run(()=>save.put({...t,data:{...t.data,done:!t.data.done}}))}>{t.data.done&&<Check size={15}/>}</button><div className="task-body"><strong>{t.data.title}</strong><span>{[t.data.cue,t.data.minutes&&`${t.data.minutes} min`].filter(Boolean).join(' · ')}</span><SubjectChip subject={data.subjects.find(s=>s.id===t.data.subject_id)}/></div><button className="icon-button" aria-label={`Delete “${t.data.title}”`} onClick={()=>run(()=>save.remove(t.id))}><Trash2 size={16}/></button></li>)}</ul>
+ <ul className="task-list">{list.map(t=><li key={t.id} className={t.data.done?'done':''}><button className="check" role="checkbox" aria-checked={t.data.done} aria-label={`Mark “${t.data.title}” ${t.data.done?'not done':'done'}`} onClick={()=>run(()=>save.put({...t,data:{...t.data,done:!t.data.done}}))}>{t.data.done&&<Check size={15}/>}</button><div className="task-body"><strong>{t.data.title}</strong><span>{[t.data.cue,progress(t)].filter(Boolean).join(' · ')}</span><SubjectChip subject={data.subjects.find(s=>s.id===t.data.subject_id)}/></div>{data.timer?.task_id===t.id?<span className="badge badge-live">In focus</span>:!data.timer&&!t.data.done&&view==='today'&&subjects.length>0&&<button className="task-start" disabled={save.isPending} aria-label={`Start focus timer for “${t.data.title}”`} onClick={()=>start(t)}><Play size={14}/>Start</button>}<button className="icon-button" aria-label={`Delete “${t.data.title}”`} onClick={()=>run(()=>save.remove(t.id))}><Trash2 size={16}/></button></li>)}</ul>
  {!list.length&&<Empty title={view==='today'?'Nothing planned yet':'Plan tomorrow tonight'}>Add a task below or start from a suggestion.</Empty>}
  {suggestions.length>0&&<div className="suggestions"><span><Sparkles size={15}/> Suggested</span>{suggestions.map(s=><button key={s.title} className="chip-button" onClick={()=>add(s.title,{minutes:s.minutes,subject_id:s.subject_id||null})}><Plus size={14}/>{s.title} · {s.minutes} min</button>)}</div>}
  <form className="task-form" onSubmit={e=>{e.preventDefault();const form=e.currentTarget,f=new FormData(form);void add(formText(f,'title'),{cue:formText(f,'cue'),subject_id:formText(f,'subject')||null,minutes:formNumber(f,'minutes')}).then(ok=>{if(ok)form.reset();});}}>

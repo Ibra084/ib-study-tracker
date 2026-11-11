@@ -52,7 +52,7 @@ Vitest covers spaced-review scheduling, exam-date capping, mistake redo rules, i
 
 ## Features and decisions
 
-- **Today**: an if–then daily planner ("I will… / when & where"), one-tap suggestions, carry-over of unfinished tasks, planning tomorrow, IB and SAT countdowns, weekly goal, upcoming deadlines and a research tip of the day.
+- **Today**: an if–then daily planner ("I will… / when & where"), one-tap suggestions, a **Start** button on each task that links the focus timer to it (the session saves under the task's subject, its minutes are added to the task, and you can mark it done when you stop; both writes happen in one SQL statement), carry-over of unfinished tasks, planning tomorrow, IB and SAT countdowns, weekly goal, upcoming deadlines and a research tip of the day.
 - **Review**: a spaced-retrieval queue. Topics come back after expanding gaps (rating Good each time: 2 → 5 → 13 → 33 days; a lapse restarts at one day). The schedule is pulled in so a review lands before the relevant exam date. You recall first, reveal your notes, then rate Forgot / Hard / Good / Easy and see when it will return. Batches of new topics are staggered so they never land as one pile. Error-log questions return after 2 days, then a week, and retire after two correct redos.
 - **SAT prep**: official test dates, target score, Bluebook practice-score log with trend and target line, an error log with mistake-type analysis and tailored advice, the official domain/skill map (one click adds every skill to Review), pacing facts and links to free official resources.
 - **IB prep**: exam start date, IA/EE/TOK/mock deadlines, a 45-point predictor, a past-paper log by subject, "lost marks" redo items and a searchable command-term guide.

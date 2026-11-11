@@ -27,6 +27,13 @@ describe('API with a PostgreSQL engine',()=>{
  const items=(await request('state')).body.items as {id:string;data:{interval?:number}}[];expect(items).toHaveLength(2);expect(items.find(i=>i.id===topic.id)?.data.interval).toBe(3);
  expect((await request('items','PUT',{id:topic.id,kind:'task',data:task.data})).status).toBe(409);expect((await request('items','PUT',{id:PROFILE_ID,kind:'score',data:{test:'sat',date:'2026-11-01',rw:700}})).status).toBe(400);
  expect((await request('export')).body.items).toHaveLength(2);expect((await request('items','DELETE',{id:task.id})).status).toBe(200);expect((await request('items','DELETE',{id:task.id})).status).toBe(404);});
+ it('links the timer to a task, saves under its subject and credits the task once',async()=>{const task={id:crypto.randomUUID(),kind:'task',data:{date:'2026-11-11',title:'Kinematics past paper',subject_id:defaultSubjects[1].id,minutes:30}};expect((await request('items','PUT',task)).status).toBe(200);
+ expect((await request('timer','POST',{action:'start',subject_id:defaultSubjects[1].id,activity_type_id:defaultActivities[3].id,task_id:crypto.randomUUID()})).status).toBe(404);
+ expect((await request('timer','POST',{action:'start',subject_id:defaultSubjects[1].id,activity_type_id:defaultActivities[3].id,task_id:task.id})).status).toBe(200);const timer=(await request('timer')).body;expect(timer.task_id).toBe(task.id);
+ const session={id:crypto.randomUUID(),subject_id:defaultSubjects[1].id,activity_type_id:defaultActivities[3].id,started_at:new Date().toISOString(),duration_minutes:32.5};const stop={action:'stop',id:timer.id,session,complete_task:true};
+ expect((await request('timer','POST',stop)).status).toBe(200);expect((await request('timer','POST',stop)).status).toBe(409);
+ const state=(await request('state')).body as {sessions:{id:string;subject_id:string}[];items:{id:string;data:{logged_minutes:number;done:boolean}}[]};
+ expect(state.sessions.find(x=>x.id===session.id)?.subject_id).toBe(defaultSubjects[1].id);expect(state.items.find(i=>i.id===task.id)?.data).toMatchObject({logged_minutes:32.5,done:true});});
  it('throttles logins using durable database counters',async()=>{await holder.db.query("INSERT INTO login_attempts(bucket,attempts,reset_at) VALUES('irrelevant',1,now())");for(let i=0;i<10;i++)await request('login','POST',{passcode:'incorrect'},false);expect((await request('login','POST',{passcode:'private-test-passcode'},false)).status).toBe(429);},15000);
 });
 
