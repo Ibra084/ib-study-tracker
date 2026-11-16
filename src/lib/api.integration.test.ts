@@ -39,6 +39,10 @@ describe('API with a PostgreSQL engine',()=>{
  it('adds the overall SAT subject to an existing database exactly once',async()=>{expect(((await request('state')).body.subjects as {id:string}[]).some(s=>s.id===SAT_ID)).toBe(true);
  await holder.db.query('DELETE FROM subjects WHERE id=$1',[SAT_ID]);await migrate(neon('postgresql://test') as never);expect((await holder.db.query('SELECT 1 FROM subjects WHERE id=$1',[SAT_ID])).rows).toHaveLength(0);
  await holder.db.query("DELETE FROM app_meta WHERE key='sat_overall_v1'");await migrate(neon('postgresql://test') as never);expect((await holder.db.query('SELECT name FROM subjects WHERE id=$1',[SAT_ID])).rows).toEqual([{name:'SAT'}]);});
+ it('upgrades an older database so calendar events can be saved',async()=>{await holder.db.exec("ALTER TABLE items DROP CONSTRAINT items_kind_check; ALTER TABLE items ADD CONSTRAINT items_kind_check CHECK(kind IN ('topic','mistake','score','task','milestone','profile'))");
+ const event={id:crypto.randomUUID(),kind:'event',data:{title:'Chemistry Paper 1a',date:'2026-11-25',period:'Period 2',category:'test',subject_id:defaultSubjects[3].id}};expect((await request('items','PUT',event)).status).toBe(500);
+ await migrate(neon('postgresql://test') as never);expect((await request('items','PUT',event)).status).toBe(200);await migrate(neon('postgresql://test') as never);
+ expect(((await request('state')).body.items as {id:string;data:{period:string;start:null}}[]).find(i=>i.id===event.id)?.data).toMatchObject({period:'Period 2',start:null});});
  it('throttles logins using durable database counters',async()=>{await holder.db.query("INSERT INTO login_attempts(bucket,attempts,reset_at) VALUES('irrelevant',1,now())");for(let i=0;i<10;i++)await request('login','POST',{passcode:'incorrect'},false);expect((await request('login','POST',{passcode:'private-test-passcode'},false)).status).toBe(429);},15000);
 });
 

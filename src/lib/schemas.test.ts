@@ -13,4 +13,9 @@ describe('validation',()=>{
   expect(itemSchema.safeParse({...topic,data:{...topic.data,due:'next week'}}).success).toBe(false);expect(itemSchema.safeParse({...topic,data:{...topic.data,extra:1}}).success).toBe(false);
   expect(itemSchema.safeParse({id:crypto.randomUUID(),kind:'score',data:{test:'sat',date:'2026-11-01',rw:650}}).success).toBe(false);expect(itemSchema.safeParse({id:crypto.randomUUID(),kind:'score',data:{test:'sat',date:'2026-11-01',rw:650,math:710}}).success).toBe(true);expect(itemSchema.safeParse({id:crypto.randomUUID(),kind:'score',data:{test:'ib',date:'2026-11-01',percent:72}}).success).toBe(false);
   expect(exportSchema.safeParse({...backup,items:[topic]}).success).toBe(true);expect(exportSchema.safeParse({...backup,items:[{...topic,data:{...topic.data,subject_id:crypto.randomUUID()}}]}).success).toBe(false);expect(exportSchema.parse(backup).items).toEqual([]);});
+ it('validates calendar times and keeps end after start',()=>{const block={id:crypto.randomUUID(),kind:'task',data:{date:'2026-11-17',title:'Moles practice',start:'19:00',end:'19:45'}};expect(itemSchema.safeParse(block).success).toBe(true);
+  for(const bad of ['7:00','24:00','19:60','19:00:00'])expect(itemSchema.safeParse({...block,data:{...block.data,start:bad}}).success).toBe(false);
+  expect(itemSchema.safeParse({...block,data:{...block.data,end:'18:30'}}).success).toBe(false);
+  const test={id:crypto.randomUUID(),kind:'event',data:{title:'Chemistry Paper 1a',date:'2026-11-25',category:'test',period:'Period 2'}};expect(itemSchema.parse(test).data).toMatchObject({start:null,end:null,plan_dismissed:false});
+  expect(itemSchema.safeParse({...test,data:{...test.data,category:'party'}}).success).toBe(false);});
 });

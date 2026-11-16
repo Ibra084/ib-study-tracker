@@ -6,8 +6,9 @@ export const today=(now=new Date())=>format(now,'yyyy-MM-dd');
 export const shift=(day:string,days:number)=>format(addDays(parseISO(day),days),'yyyy-MM-dd');
 export const daysUntil=(day:string,now=new Date())=>differenceInCalendarDays(parseISO(day),now);
 export const of=<K extends Item['kind']>(items:Item[],kind:K)=>items.filter((i):i is ItemOf<K>=>i.kind===kind);
-export const emptyProfile:Profile={sat_target:null,sat_date:null,ib_exam_start:null,predicted:{},core_bonus:null};
-export const profileOf=(items:Item[])=>of(items,'profile').find(p=>p.id===PROFILE_ID)?.data||emptyProfile;
+export const emptyProfile:Profile={sat_target:null,sat_date:null,ib_exam_start:null,predicted:{},core_bonus:null,school_start:'07:40',school_end:'15:20'};
+// Older saved profiles lack newer fields, so defaults fill the gaps.
+export const profileOf=(items:Item[]):Profile=>({...emptyProfile,...of(items,'profile').find(p=>p.id===PROFILE_ID)?.data});
 export const ratings=[
  {value:1,label:'Forgot',hint:'I could not recall it'},
  {value:2,label:'Hard',hint:'I got there with real effort'},

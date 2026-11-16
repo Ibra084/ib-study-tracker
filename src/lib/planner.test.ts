@@ -1,0 +1,27 @@
+import {describe,it,expect} from 'vitest';
+import {weekDays,monthCells,entriesOf,layoutDay,heavyDays,suggestRevision,toMin,fromMin,timeRange} from './planner';
+import {emptyProfile} from './review';
+import type {Item} from '../types';
+const test=(id:string,date:string,title='Test',extra={}):Item=>({id,kind:'event',data:{title,date,start:null,end:null,period:'',category:'test',subject_id:null,notes:'',plan_dismissed:false,...extra}});
+const task=(id:string,date:string,start:string|null,end:string|null,extra={}):Item=>({id,kind:'task',data:{date,title:id,cue:'',subject_id:null,minutes:null,done:false,logged_minutes:0,start,end,event_id:null,...extra}});
+describe('calendar planner',()=>{
+ it('converts times and builds Monday-first weeks and six-week months',()=>{expect(toMin('15:20')).toBe(920);expect(fromMin(965)).toBe('16:05');
+  expect(weekDays('2026-11-18')).toEqual(['2026-11-16','2026-11-17','2026-11-18','2026-11-19','2026-11-20','2026-11-21','2026-11-22']);
+  const cells=monthCells('2026-11-16');expect(cells).toHaveLength(42);expect(cells[0]).toBe('2026-10-26');expect(cells).toContain('2026-11-30');});
+ it('merges events, milestones and tasks, tests first',()=>{const items:Item[]=[task('a','2026-11-25','16:00','16:45'),test('t','2026-11-25','Physics'),{id:'m',kind:'milestone',data:{title:'IA draft',date:'2026-11-25',category:'IA',subject_id:null,done:false}}];
+  expect(entriesOf(items).map(e=>[e.id,e.category])).toEqual([['t','test'],['m','deadline'],['a','study']]);});
+ it('puts overlapping blocks in side-by-side lanes',()=>{const e=entriesOf([task('a','d','16:00','17:00'),task('b','d','16:30','17:30'),task('c','d','17:00','17:30'),task('z','d','19:00','19:30')]);
+  expect(layoutDay(e).map(p=>[p.entry.id,p.lane,p.lanes])).toEqual([['a',0,2],['b',1,2],['c',0,2],['z',0,1]]);});
+ it('flags days with more than one test',()=>{const e=entriesOf([test('a','2026-11-25'),test('b','2026-11-25'),test('c','2026-11-26')]);expect(heavyDays(e,'2026-11-16').map(h=>[h.date,h.tests.length])).toEqual([['2026-11-25',2]]);});
+ it('spaces three blocks before a test: after school on weekdays, 10:00 at weekends',()=>{const [s]=suggestRevision([test('t','2026-11-25','Chemistry Paper 1a',{subject_id:null})],emptyProfile,'2026-11-16');
+  expect(s.blocks.map(b=>[b.date,b.start,b.end,b.title])).toEqual([['2026-11-19','16:00','16:45','Blurt & check: Chemistry Paper 1a'],['2026-11-22','10:00','10:45','Practice questions: Chemistry Paper 1a'],['2026-11-24','16:00','16:30','Final review: Chemistry Paper 1a']]);});
+ it('keeps the final review when the test is close and never plans for past or today',()=>{expect(suggestRevision([test('t','2026-11-17')],emptyProfile,'2026-11-16')[0].blocks.map(b=>b.title)).toEqual(['Final review: Test']);expect(suggestRevision([test('t','2026-11-16')],emptyProfile,'2026-11-16')).toEqual([]);});
+ it('fits several tests on the same day around each other and existing blocks',()=>{const items=[test('a','2026-11-25','A'),test('b','2026-11-25','B'),task('x','2026-11-24','16:00','17:00')];const all=suggestRevision(items,emptyProfile,'2026-11-16').flatMap(s=>s.blocks).filter(b=>b.date==='2026-11-24');
+  expect(all.map(b=>[b.start,b.end])).toEqual([['17:15','17:45'],['18:00','18:30']]);});
+ it('caps each evening and slides overflow to earlier days, never past 21:00',()=>{const items=['a','b','c','d','e','f'].map(id=>test(id,'2026-11-25',id.toUpperCase()));const blocks=suggestRevision(items,emptyProfile,'2026-11-16').flatMap(s=>s.blocks);
+  const perDay=new Map<string,number>();for(const b of blocks)perDay.set(b.date,(perDay.get(b.date)||0)+1);
+  for(const [date,n] of perDay)expect(n).toBeLessThanOrEqual(['2026-11-21','2026-11-22'].includes(date)?5:4);
+  expect(blocks.every(b=>toMin(b.end)<=21*60)).toBe(true);expect(blocks.filter(b=>b.title.startsWith('Final review')).map(b=>b.date).sort()).toEqual(['2026-11-23','2026-11-23','2026-11-24','2026-11-24','2026-11-24','2026-11-24']);});
+ it('skips tests that are dismissed, already planned or too far away',()=>{const items=[test('a','2026-11-25','A',{plan_dismissed:true}),test('b','2026-11-26','B'),task('x','2026-11-20','16:00','16:45',{event_id:'b'}),test('c','2027-01-20','C')];expect(suggestRevision(items,emptyProfile,'2026-11-16')).toEqual([]);});
+ it('labels times and periods',()=>{expect(timeRange({start:'16:00',end:'16:45'})).toBe('16:00–16:45');expect(timeRange({start:null,end:null,period:'Period 5'})).toBe('Period 5');});
+});
